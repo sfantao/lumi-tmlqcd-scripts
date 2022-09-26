@@ -12,9 +12,10 @@ set_base_environment () {
 
 set +x
 module purge
+module load gdb
 module load gcc/10.2.0
 module load cuda/11.3.0
-module load rocm/5.2.3
+module load rocm/rocm-5.3-53 #5.2.3
 set -x
 
 EOF
@@ -31,7 +32,8 @@ whatis("Description: An open source Message Passing Interface implementation")
 whatis("URL: https://github.com/open-mpi/ompi.git")
 
 depends_on("gcc/10.2.0")
-depends_on("rocm/5.2.3")
+depends_on("cuda/11.3.0")
+depends_on("rocm/rocm-5.3-53")
 
 local base = "$wd/mpi"
 
@@ -187,7 +189,9 @@ build_mpi () {
     --with-slurm=/share/opt/slurm/20.11.4 \
     --with-verbs=/share/modules/mlnxofed/5.2-2.2.0.0 \
     --with-hwloc-libdir=/share/modules/hwloc/2.4.1/lib \
-    --with-ucx=$wd/ucx
+    --with-ucx=$wd/ucx \
+    --with-rocm=$ROCM_PATH \
+    --with-cuda=$THERA_CUDA_PATH
 
   nice make -j
   nice make -j install
@@ -207,53 +211,57 @@ build_lime () {
 }
 
 build_quda_rocm () {
-  rm -rf $wd/quda-src/build-rocm
-  mkdir $wd/quda-src/build-rocm
+#   rm -rf $wd/quda-src/build-rocm
+#   mkdir $wd/quda-src/build-rocm
   cd $wd/quda-src/build-rocm
 
   module load cmake/3.23.0
   cmake \
-    -DCMAKE_C_COMPILER=$(which gcc) \
-    -DCMAKE_CXX_COMPILER=$(which hipcc) \
-    -DCMAKE_HIP_COMPILER=$ROCM_PATH/llvm/bin/clang++ \
-    -DCMAKE_BUILD_TYPE=DEVEL \
-    -DQUDA_TARGET_TYPE=HIP \
-    -DCMAKE_INSTALL_PREFIX=$wd/quda-rocm \
-    -DQUDA_BUILD_ALL_TESTS=ON \
-    -DQUDA_MPI=ON \
-    -DQUDA_GPU_ARCH=gfx90a \
-    -DAMDGPU_TARGETS=gfx90a \
-    -DGPU_TARGETS=gfx90a \
-    -GNinja \
-    $wd/quda-src
-
-  nice ninja
-  
-  rm -rf $wd/quda-rocm
+#     -DCMAKE_C_COMPILER=$(which gcc) \
+#     -DCMAKE_CXX_COMPILER=$(which hipcc) \
+#     -DCMAKE_HIP_COMPILER=$ROCM_PATH/llvm/bin/clang++ \
+#     -DCMAKE_BUILD_TYPE=DEVEL \
+#     -DQUDA_TARGET_TYPE=HIP \
+#     -DCMAKE_INSTALL_PREFIX=$wd/quda-rocm \
+#     -DQUDA_BUILD_ALL_TESTS=ON \
+#     -DQUDA_MULTIGRID=ON \
+#     -DQUDA_MPI=ON \
+#     -DQUDA_GPU_ARCH=gfx90a \
+#     -DAMDGPU_TARGETS=gfx90a \
+#     -DGPU_TARGETS=gfx90a \
+#     -GNinja \
+#     $wd/quda-src
+# 
+#   nice ninja
+#   
+#   rm -rf $wd/quda-rocm
   nice ninja install
 }
 
 build_quda_cuda () {
-  rm -rf $wd/quda-src/build-cuda
-  mkdir $wd/quda-src/build-cuda
+#   rm -rf $wd/quda-src/build-cuda
+#   mkdir $wd/quda-src/build-cuda
   cd $wd/quda-src/build-cuda
 
   module load cmake/3.20.0
-  cmake \
-    -DCMAKE_C_COMPILER=$(which gcc) \
-    -DCMAKE_CXX_COMPILER=$(which g++) \
-    -DCMAKE_BUILD_TYPE=DEVEL \
-    -DQUDA_TARGET_TYPE=CUDA \
-    -DCMAKE_INSTALL_PREFIX=$wd/quda-cuda \
-    -DQUDA_BUILD_ALL_TESTS=ON \
-    -DQUDA_MPI=ON \
-    -DQUDA_GPU_ARCH=80 \
-    -GNinja \
-    $wd/quda-src
-
-  nice ninja
-  
-  rm -rf $wd/quda-cuda
+#   cmake \
+#     -DCMAKE_EXE_LINKER_FLAGS='-mcmodel=large' \
+#     -DCMAKE_SHARED_LINKER_FLAGS='-mcmodel=large' \
+#     -DCMAKE_C_COMPILER=$(which gcc) \
+#     -DCMAKE_CXX_COMPILER=$(which g++) \
+#     -DCMAKE_BUILD_TYPE=RELEASE \
+#     -DQUDA_TARGET_TYPE=CUDA \
+#     -DCMAKE_INSTALL_PREFIX=$wd/quda-cuda \
+#     -DQUDA_BUILD_ALL_TESTS=ON \
+#     -DQUDA_MULTIGRID=ON \
+#     -DQUDA_MPI=ON \
+#     -DQUDA_GPU_ARCH=sm_80 \
+#     -GNinja \
+#     $wd/quda-src
+# 
+#   nice ninja
+#   
+#   rm -rf $wd/quda-cuda
   nice ninja install
 }
 
@@ -292,95 +300,8 @@ run_dslash () {
   folder="test-dslash-$type-${ngpus}gpus"
   
   rm -rf $wd/$folder
-  mkdir $wd/$folder
-  cd $wd/$folder
-  
-  if [ "$type" = "rocm" ] ; then
-    cat > hostfile << EOF
-$(hostname)
-$(hostname)
-$(hostname)
-$(hostname)
-EOF
-    cat > rankfile << EOF
-rank 0=$(hostname) slot=24-25
-rank 1=$(hostname) slot=26-27
-rank 2=$(hostname) slot=28-29
-rank 3=$(hostname) slot=30-31
-EOF
-  else
-    cat > hostfile << EOF
-$(hostname)
-$(hostname)
-EOF
-    cat > rankfile << EOF
-rank 0=$(hostname) slot=16
-rank 1=$(hostname) slot=0
-EOF
-  fi
-  
-  for L in 16 24 32 48; do
-    cat > cmd-$L.sh << EOF
-#!/bin/bash -ex
-
-echo Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$)
-
-if [ "$type" = "cuda" ] ; then
-  export CUDA_VISIBLE_DEVICES=0,1
-  
-  
-  pcmd-"/usr/local/bin/nsys profile \
-     -o $wd/nsys.out \
-     --stats=true \
-     --sample=none \
-     --trace=cuda,nvtx,mpi \
-     --capture-range=none"
-       
-     # --kernel-regex-base function \
-     # --kernel-id ::regex:kCalcPMEOrthoNBFrc16_kernel:5000 -f \
-     # --export kCalcPMEOrthoNBFrc16_kernel \
-     #
-     
-#   pcmd="ncu \
-#     --target-processes all \
-#     --set full \
-#     --import-source yes \
-#     --kernel-regex-base function \
-#     --kernel-id ::regex::100 \
-#     -f --export all-kernels"
-else
-  unset ROCR_VISIBLE_DEVICES
-  #export ROCR_VISIBLE_DEVICES=0,1,2,3
-  unset HIP_VISIBLE_DEVICES
-  export HIP_VISIBLE_DEVICES=0,1,2,3
-   
-  pcmd="rocprof --hip-trace --basenames on -o $wd/rocprof-results.csv"
-  #pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o $wd/rocprof-results.csv"
-fi  
-
-echo "Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$) - GPUs \$HIP_VISIBLE_DEVICES"
-
-export QUDA_ENABLE_TUNING=1
-export QUDA_RESOURCE_PATH=$(pwd)
-$wd/quda-$type/bin/dslash_test \
-  --dim $L $L $(( L / $ngpus )) $(( $L / 4 )) \
-  --gridsize 1 1 1 $ngpus \
-  --niter $(( 100000 / $L )) \
-  --prec single \
-  --dslash-type twisted-clover |& tee L${L}-rank\$OMPI_COMM_WORLD_RANK.out
-EOF
-    chmod +x cmd-$L.sh
-    mpirun --display bind,allocation --np $ngpus --hostfile hostfile --rankfile rankfile cmd-$L.sh |& tee log-$L.out
-  done
-}
-
-run_multigrid () {
-  type=$1
-  ngpus=$2
-  folder="test-multigrid-$type-${ngpus}gpus"
-  
-  rm -rf $wd/$folder
-  mkdir $wd/$folder
+  #mkdir $wd/$folder
+  cp -rf $wd/postprocess/initial-runs-1strun/$folder $wd/$folder
   cd $wd/$folder
   
   if [ "$type" = "rocm" ] ; then
@@ -416,8 +337,9 @@ echo Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$)
 if [ "$type" = "cuda" ] ; then
   export CUDA_VISIBLE_DEVICES=0,1
   
-  pcmd-"/usr/local/bin/nsys profile \
-     -o $wd/nsys.out \
+  # Post process with nsys stats  --report gputrace --format csv nsys.out.qdrep 
+  pcmd="/usr/local/bin/nsys profile \
+     -o L$L-nsys.out \
      --stats=true \
      --sample=none \
      --trace=cuda,nvtx,mpi \
@@ -428,21 +350,21 @@ if [ "$type" = "cuda" ] ; then
      # --export kCalcPMEOrthoNBFrc16_kernel \
      #
      
-  pcmd="ncu \
-    --target-processes all \
-    --set full \
-    --import-source yes \
-    --kernel-regex-base function \
-    --kernel-id ::regex::100 \
-    -f --export all-kernels"
+#   pcmd="ncu \
+#     --target-processes all \
+#     --set full \
+#     --import-source yes \
+#     --kernel-regex-base function \
+#     --kernel-id ::regex::100 \
+#     -f --export L$L-all-kernels"
 else
   unset ROCR_VISIBLE_DEVICES
   #export ROCR_VISIBLE_DEVICES=0,1,2,3
   unset HIP_VISIBLE_DEVICES
   export HIP_VISIBLE_DEVICES=0,1,2,3
-  
-  pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o rocprof-results.csv"
-  pcmd="rocprof --hip-trace --basenames on -o rocprof-results.csv"
+   
+  pcmd="rocprof --hip-trace --basenames on -o L$L-rocprof-results.csv"
+  # pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o L$L-rocprof-results.csv"
 fi  
 
 echo "Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$) - GPUs \$HIP_VISIBLE_DEVICES"
@@ -456,15 +378,132 @@ fi
 
 \$pcmd \
 $wd/quda-$type/bin/dslash_test \
-  --dim $L $L $L $(( $L / $ngpus )) \
+  --dim $L $L $(( L / $ngpus )) $(( $L / 4 )) \
   --gridsize 1 1 1 $ngpus \
   --niter $(( 100000 / $L )) \
   --prec single \
   --dslash-type twisted-clover |& tee L${L}-rank\$OMPI_COMM_WORLD_RANK.out
-
 EOF
     chmod +x cmd-$L.sh
-    mpirun --display bind,allocation --np $ngpus --hostfile hostfile --rankfile rankfile cmd-$L.sh |& tee log-$L.out
+    mpirun --display bind,allocation --np $ngpus --hostfile hostfile --rankfile rankfile ./cmd-$L.sh |& tee log-$L.out
+  done
+}
+
+run_multigrid () {
+  type=$1
+  ngpus=$2
+  folder="test-multigrid-$type-${ngpus}gpus"
+  
+  rm -rf $wd/$folder
+  #mkdir $wd/$folder
+  cp -rf $wd/postprocess/initial-runs-1strun/$folder $wd/$folder
+  cd $wd/$folder
+  
+  cat > gdb.commands << EOF
+set index-cache directory /home/sfantao/gdb-index
+set index-cache on
+
+set pagination off
+set can-use-hw-watchpoints 0
+
+target remote localhost:12345
+set sysroot /
+
+layout src
+
+b main
+commands
+silent
+end
+c 
+
+EOF
+  
+  if [ "$type" = "rocm" ] ; then
+    cat > hostfile << EOF
+$(hostname)
+$(hostname)
+$(hostname)
+$(hostname)
+EOF
+    cat > rankfile << EOF
+rank 0=$(hostname) slot=24-25
+rank 1=$(hostname) slot=26-27
+rank 2=$(hostname) slot=28-29
+rank 3=$(hostname) slot=30-31
+EOF
+  else
+    cat > hostfile << EOF
+$(hostname)
+$(hostname)
+EOF
+    cat > rankfile << EOF
+rank 0=$(hostname) slot=16
+rank 1=$(hostname) slot=0
+EOF
+  fi
+  
+  for L in 8 16 ; do
+    cat > cmd-$L.sh << EOF
+#!/bin/bash -ex
+
+echo Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$)
+
+if [ "$type" = "cuda" ] ; then
+  export CUDA_VISIBLE_DEVICES=0,1
+  
+  pcmd="/usr/local/bin/nsys profile \
+     -o L$L-nsys.out \
+     --stats=true \
+     --sample=none \
+     --trace=cuda,nvtx,mpi \
+     --capture-range=none"
+       
+     # --kernel-regex-base function \
+     # --kernel-id ::regex:kCalcPMEOrthoNBFrc16_kernel:5000 -f \
+     # --export kCalcPMEOrthoNBFrc16_kernel \
+     #
+     
+#   pcmd="ncu \
+#     --target-processes all \
+#     --set full \
+#     --import-source yes \
+#     --kernel-regex-base function \
+#     --kernel-id ::regex::100 \
+#     -f --export L$L-all-kernels"
+else
+  unset ROCR_VISIBLE_DEVICES
+  #export ROCR_VISIBLE_DEVICES=0,1,2,3
+  unset HIP_VISIBLE_DEVICES
+  export HIP_VISIBLE_DEVICES=0,1,2,3
+  
+  # pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o L$L-rocprof-results.csv"
+  pcmd="rocprof --hip-trace --basenames on -o L$L-rocprof-results.csv"
+  
+  
+  # echo "gdb -x gdb.commands $wd/quda-$type/bin/multigrid_benchmark_test"
+#   pcmd="gdbserver --once localhost:12345"
+fi  
+
+echo "Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$) - GPUs \$HIP_VISIBLE_DEVICES"
+
+export QUDA_ENABLE_TUNING=1
+export QUDA_RESOURCE_PATH=$(pwd)
+
+if [ \$OMPI_COMM_WORLD_RANK  -ne 0 ] ; then
+  pcmd=''
+fi
+
+\$pcmd \
+$wd/quda-$type/bin/multigrid_benchmark_test \
+  --dim $L $L $L $(( $L / $ngpus / 2 )) \
+  --gridsize 1 1 1 $ngpus \
+  --niter 100000 \
+  --prec single \
+  --dslash-type twisted-clover |& tee L${L}-rank\$OMPI_COMM_WORLD_RANK.out
+EOF
+    chmod +x cmd-$L.sh
+    mpirun --display bind,allocation --np $ngpus --hostfile hostfile --rankfile rankfile ./cmd-$L.sh |& tee log-$L.out
   done
 }
 
@@ -486,8 +525,14 @@ set_mpi_environment
 
 # build_lime
 
-# build_quda_rocm
-# build_quda_cuda
+
+# if ! which nvidia-smi &> /dev/null ; then
+#   build_quda_rocm
+#   true
+# else
+#   build_quda_cuda
+#   true
+# fi
 
 # {
 #   set_quda_environment "rocm" 
@@ -495,30 +540,46 @@ set_mpi_environment
 #   set_tmlqcd_environment
 # }
 
-# {
-#   set_quda_environment "rocm" 
-#   run_dslash "rocm" 1
-#   run_dslash "rocm" 2
-#   run_dslash "rocm" 4
-# }
 
-# {
-#   set_quda_environment "cuda" 
-#   run_dslash "cuda" 1
-#   run_dslash "cuda" 2
-# }
-
-{
+if ! which nvidia-smi &> /dev/null ; then
+(
   set_quda_environment "rocm" 
-#   run_multigrid "rocm" 1
-#   run_multigrid "rocm" 2
-  run_multigrid "rocm" 4
-}
+#   run_dslash "rocm" 1
+  run_dslash "rocm" 2
+#   run_dslash "rocm" 4
+  true
+)
+fi
 
-# {
-#   set_quda_environment "cuda" 
-#   run_multigrid "cuda" 1
-#   run_multigrid "cuda" 2
-# }
+exit 0
+
+if which nvidia-smi &> /dev/null ; then
+(
+  set_quda_environment "cuda" 
+  run_dslash "cuda" 1
+  run_dslash "cuda" 2
+  true
+)
+fi
+
+if ! which nvidia-smi &> /dev/null ; then
+(
+  set_quda_environment "rocm" 
+  run_multigrid "rocm" 1
+  run_multigrid "rocm" 2
+  run_multigrid "rocm" 4
+  true
+)
+fi
+
+
+if which nvidia-smi &> /dev/null ; then
+(
+  set_quda_environment "cuda" 
+ run_multigrid "cuda" 1
+ run_multigrid "cuda" 2
+  true
+)
+fi
 
 
