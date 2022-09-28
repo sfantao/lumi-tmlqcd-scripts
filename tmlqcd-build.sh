@@ -1,4 +1,18 @@
 #!/bin/bash -ex
+export http_proxy=http://localhost:13128 
+export https_proxy=http://localhost:13128
+
+MASKS=(
+"" \
+"ff00000000000000ff000000000000" \
+"ff00000000000000ff000000000000,ff00000000000000ff00000000000000" \
+"ff00000000000000ff000000000000,ff00000000000000ff00000000000000,ff00000000000000ff0000" \
+"ff00000000000000ff000000000000,ff00000000000000ff00000000000000,ff00000000000000ff0000,ff00000000000000ff000000" \
+"ff00000000000000ff000000000000,ff00000000000000ff00000000000000,ff00000000000000ff0000,ff00000000000000ff000000,ff00000000000000ff" \
+"ff00000000000000ff000000000000,ff00000000000000ff00000000000000,ff00000000000000ff0000,ff00000000000000ff000000,ff00000000000000ff,ff00000000000000ff00" \
+"ff00000000000000ff000000000000,ff00000000000000ff00000000000000,ff00000000000000ff0000,ff00000000000000ff000000,ff00000000000000ff,ff00000000000000ff00,ff00000000000000ff00000000" \
+"ff00000000000000ff000000000000,ff00000000000000ff00000000000000,ff00000000000000ff0000,ff00000000000000ff000000,ff00000000000000ff,ff00000000000000ff00,ff00000000000000ff00000000,ff00000000000000ff0000000000")
+
 
 base=$(pwd)
 conda_location=$base/miniconda3
@@ -10,19 +24,18 @@ set_base_environment () {
   cat > $wd/mymodules/myrocm/default.sh << EOF
 #!/bin/bash -e
 
-set +x
 module purge
-module load gdb
-module load gcc/10.2.0
-module load cuda/11.3.0
-module load rocm/rocm-5.3-53 #5.2.3
-set -x
+module load PrgEnv-gnu/8.3.3
+module load craype-accel-amd-gfx90a
+module load amd/5.2.3
 
 EOF
   source $wd/mymodules/myrocm/default.sh
 }
 
 set_mpi_environment () {
+  return
+  
   mkdir -p $wd/mymodules/myopenmpi
   cat > $wd/mymodules/myopenmpi/tmlqcd.lua << EOF
 whatis("Name: myopenmpi")
@@ -75,25 +88,13 @@ set_tmlqcd_environment () {
 # Checkout components
 #
 
-checkout_ucx () {
-  cd $wd
+checkout_cmake () {
+  rm -rf $wd/cmake
+  mkdir -p $wd/cmake
+  cd $wd/cmake
   
-  rm -rf ucx-src 
-  git clone --recursive https://github.com/openucx/ucx.git ucx-src 
-  cd  ucx-src 
-  git checkout -b mydev v1.13.1
-  git submodule sync
-  git submodule update --init --recursive --jobs 0
-  ./autogen.sh
-}
-
-checkout_mpi () {
-  cd $wd
-  
-  rm -rf openmpi-5.0.0rc2* mpi*
-  curl -LO https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-5.0.0rc2.tar.gz
-  tar -xf openmpi-5.0.0rc2.tar.gz
-  ln -s openmpi-5.0.0rc2 mpi-src
+  curl -LO https://github.com/Kitware/CMake/releases/download/v3.23.0/cmake-3.23.0-linux-x86_64.sh
+  bash cmake-3.23.0-linux-x86_64.sh --skip-license --prefix=$wd/cmake
 }
 
 checkout_quda () {
@@ -152,50 +153,6 @@ conda_base () {
 #
 # Build components 
 #
-build_ucx () {
-  rm -rf $wd/ucx-src/build
-  mkdir $wd/ucx-src/build
-  cd $wd/ucx-src/build
-  
-  ../configure \
-    --prefix=$wd/ucx \
-    --disable-logging \
-    --disable-debug \
-    --disable-assertions \
-    --disable-params-check \
-    --enable-optimizations \
-    --enable-mt \
-    --disable-logging \
-    --disable-debug \
-    --disable-assertions \
-    --disable-params-check \
-    --enable-optimizations \
-    --with-rocm=$ROCM_PATH \
-    --with-cuda=$THERA_CUDA_PATH \
-    --with-verbs=/share/modules/mlnxofed/5.2-2.2.0.0/ \
-    --with-knem=/share/modules/knem/1.1.4/
-
-  nice make -j
-  nice make -j install
-}
-
-build_mpi () {
-  rm -rf $wd/mpi-src/build
-  mkdir $wd/mpi-src/build
-  cd $wd/mpi-src/build
-  
-  ../configure \
-    --prefix=$wd/mpi \
-    --with-slurm=/share/opt/slurm/20.11.4 \
-    --with-verbs=/share/modules/mlnxofed/5.2-2.2.0.0 \
-    --with-hwloc-libdir=/share/modules/hwloc/2.4.1/lib \
-    --with-ucx=$wd/ucx \
-    --with-rocm=$ROCM_PATH \
-    --with-cuda=$THERA_CUDA_PATH
-
-  nice make -j
-  nice make -j install
-}
 
 build_lime () {
   rm -rf $wd/lime-src/build
@@ -211,59 +168,35 @@ build_lime () {
 }
 
 build_quda_rocm () {
-#   rm -rf $wd/quda-src/build-rocm
-#   mkdir $wd/quda-src/build-rocm
+  rm -rf $wd/quda-src/build-rocm
+  mkdir $wd/quda-src/build-rocm
   cd $wd/quda-src/build-rocm
 
-  module load cmake/3.23.0
-  cmake \
-#     -DCMAKE_C_COMPILER=$(which gcc) \
-#     -DCMAKE_CXX_COMPILER=$(which hipcc) \
-#     -DCMAKE_HIP_COMPILER=$ROCM_PATH/llvm/bin/clang++ \
-#     -DCMAKE_BUILD_TYPE=DEVEL \
-#     -DQUDA_TARGET_TYPE=HIP \
-#     -DCMAKE_INSTALL_PREFIX=$wd/quda-rocm \
-#     -DQUDA_BUILD_ALL_TESTS=ON \
-#     -DQUDA_MULTIGRID=ON \
-#     -DQUDA_MPI=ON \
-#     -DQUDA_GPU_ARCH=gfx90a \
-#     -DAMDGPU_TARGETS=gfx90a \
-#     -DGPU_TARGETS=gfx90a \
-#     -GNinja \
-#     $wd/quda-src
-# 
-#   nice ninja
-#   
-#   rm -rf $wd/quda-rocm
+  #module load cmake/3.23.0
+  
+  CMAKE_PREFIX_PATH="$CRAY_MPICH_PREFIX:$CMAKE_PREFIX_PATH" \
+  $wd/cmake/bin/cmake \
+    -DCMAKE_C_COMPILER=$(which cc) \
+    -DCMAKE_CXX_COMPILER=$(which hipcc) \
+    -DCMAKE_HIP_COMPILER=$ROCM_PATH/llvm/bin/clang++ \
+    -DCMAKE_BUILD_TYPE=DEVEL \
+    -DQUDA_TARGET_TYPE=HIP \
+    -DCMAKE_INSTALL_PREFIX=$wd/quda-rocm \
+    -DQUDA_BUILD_ALL_TESTS=ON \
+    -DQUDA_MULTIGRID=ON \
+    -DQUDA_MPI=ON \
+    -DQUDA_GPU_ARCH=gfx90a \
+    -DAMDGPU_TARGETS=gfx90a \
+    -DGPU_TARGETS=gfx90a \
+    -GNinja \
+    $wd/quda-src |& tee sam-cmake.log
+
+  nice ninja
+  
+  rm -rf $wd/quda-rocm
   nice ninja install
 }
 
-build_quda_cuda () {
-#   rm -rf $wd/quda-src/build-cuda
-#   mkdir $wd/quda-src/build-cuda
-  cd $wd/quda-src/build-cuda
-
-  module load cmake/3.20.0
-#   cmake \
-#     -DCMAKE_EXE_LINKER_FLAGS='-mcmodel=large' \
-#     -DCMAKE_SHARED_LINKER_FLAGS='-mcmodel=large' \
-#     -DCMAKE_C_COMPILER=$(which gcc) \
-#     -DCMAKE_CXX_COMPILER=$(which g++) \
-#     -DCMAKE_BUILD_TYPE=RELEASE \
-#     -DQUDA_TARGET_TYPE=CUDA \
-#     -DCMAKE_INSTALL_PREFIX=$wd/quda-cuda \
-#     -DQUDA_BUILD_ALL_TESTS=ON \
-#     -DQUDA_MULTIGRID=ON \
-#     -DQUDA_MPI=ON \
-#     -DQUDA_GPU_ARCH=sm_80 \
-#     -GNinja \
-#     $wd/quda-src
-# 
-#   nice ninja
-#   
-#   rm -rf $wd/quda-cuda
-  nice ninja install
-}
 
 build_tmlqcd () {
   rm -rf $wd/tmlqcd-src/build
@@ -328,11 +261,11 @@ rank 1=$(hostname) slot=0
 EOF
   fi
   
-  for L in 16; do
+  for L in 16 24 32 48 ; do
     cat > cmd-$L.sh << EOF
 #!/bin/bash -ex
 
-echo Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$)
+echo Rank \$SLURM_PROCID \$(taskset -p \$\$)
 
 if [ "$type" = "cuda" ] ; then
   export CUDA_VISIBLE_DEVICES=0,1
@@ -363,16 +296,16 @@ else
   unset HIP_VISIBLE_DEVICES
   export HIP_VISIBLE_DEVICES=0,1,2,3
    
-  pcmd="rocprof --hip-trace --basenames on -o L$L-rocprof-results.csv"
-  # pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o L$L-rocprof-results.csv"
+  # pcmd="rocprof --hip-trace --basenames on -o L$L-rocprof-results.csv"
+  pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o L$L-rocprof-results.csv"
 fi  
 
-echo "Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$) - GPUs \$HIP_VISIBLE_DEVICES"
+echo "Rank \$SLURM_PROCID \$(taskset -p \$\$) - GPUs \$HIP_VISIBLE_DEVICES"
 
 export QUDA_ENABLE_TUNING=1
 export QUDA_RESOURCE_PATH=$(pwd)
 
-if [ \$OMPI_COMM_WORLD_RANK  -ne 0 ] ; then
+if [ \$SLURM_PROCID  -ne 0 ] ; then
   pcmd=''
 fi
 
@@ -382,10 +315,14 @@ $wd/quda-$type/bin/dslash_test \
   --gridsize 1 1 1 $ngpus \
   --niter $(( 100000 / $L )) \
   --prec single \
-  --dslash-type twisted-clover |& tee L${L}-rank\$OMPI_COMM_WORLD_RANK.out
+  --dslash-type twisted-clover |& tee L${L}-rank\$SLURM_PROCID.out
 EOF
     chmod +x cmd-$L.sh
-    mpirun --display bind,allocation --np $ngpus --hostfile hostfile --rankfile rankfile ./cmd-$L.sh |& tee log-$L.out
+    srun -N 1 -n $ngpus \
+      --exclusive \
+      --gpus=8 \
+      --cpus-per-task=$((128/$ngpus))  --cpu-bind=mask_cpu:${MASKS[$ngpus]} \
+      ./cmd-$L.sh |& tee log-$L.out
   done
 }
 
@@ -447,7 +384,7 @@ EOF
     cat > cmd-$L.sh << EOF
 #!/bin/bash -ex
 
-echo Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$)
+echo Rank \$SLURM_PROCID \$(taskset -p \$\$)
 
 if [ "$type" = "cuda" ] ; then
   export CUDA_VISIBLE_DEVICES=0,1
@@ -477,20 +414,20 @@ else
   unset HIP_VISIBLE_DEVICES
   export HIP_VISIBLE_DEVICES=0,1,2,3
   
-  # pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o L$L-rocprof-results.csv"
-  pcmd="rocprof --hip-trace --basenames on -o L$L-rocprof-results.csv"
+  pcmd="rocprof --stats --basenames on -i $wd/counters.txt -o L$L-rocprof-results.csv"
+  # pcmd="rocprof --hip-trace --basenames on -o L$L-rocprof-results.csv"
   
   
   # echo "gdb -x gdb.commands $wd/quda-$type/bin/multigrid_benchmark_test"
 #   pcmd="gdbserver --once localhost:12345"
 fi  
 
-echo "Rank \$OMPI_COMM_WORLD_RANK \$(taskset -p \$\$) - GPUs \$HIP_VISIBLE_DEVICES"
+echo "Rank \$SLURM_PROCID \$(taskset -p \$\$) - GPUs \$HIP_VISIBLE_DEVICES"
 
 export QUDA_ENABLE_TUNING=1
 export QUDA_RESOURCE_PATH=$(pwd)
 
-if [ \$OMPI_COMM_WORLD_RANK  -ne 0 ] ; then
+if [ \$SLURM_PROCID  -ne 0 ] ; then
   pcmd=''
 fi
 
@@ -500,39 +437,32 @@ $wd/quda-$type/bin/multigrid_benchmark_test \
   --gridsize 1 1 1 $ngpus \
   --niter 100000 \
   --prec single \
-  --dslash-type twisted-clover |& tee L${L}-rank\$OMPI_COMM_WORLD_RANK.out
+  --dslash-type twisted-clover |& tee L${L}-rank\$SLURM_PROCID.out
 EOF
     chmod +x cmd-$L.sh
-    mpirun --display bind,allocation --np $ngpus --hostfile hostfile --rankfile rankfile ./cmd-$L.sh |& tee log-$L.out
+    srun -N 1 -n $ngpus \
+      --exclusive \
+      --gpus=8 \
+      --cpus-per-task=$((128/$ngpus))  --cpu-bind=mask_cpu:${MASKS[$ngpus]} \
+      ./cmd-$L.sh |& tee log-$L.out
+      
   done
 }
 
 
 set_base_environment
 
-# checkout_ucx
-# checkout_mpi
+# checkout_cmake
 # checkout_quda
 # checkout_tmlqcd
 # checkout_lime
 
 conda_base
 
-# build_ucx
-# build_mpi
-
 set_mpi_environment
 
-# build_lime
 
-
-# if ! which nvidia-smi &> /dev/null ; then
-#   build_quda_rocm
-#   true
-# else
-#   build_quda_cuda
-#   true
-# fi
+# build_quda_rocm
 
 # {
 #   set_quda_environment "rocm" 
@@ -544,20 +474,9 @@ set_mpi_environment
 if ! which nvidia-smi &> /dev/null ; then
 (
   set_quda_environment "rocm" 
-#   run_dslash "rocm" 1
+  run_dslash "rocm" 1
   run_dslash "rocm" 2
-#   run_dslash "rocm" 4
-  true
-)
-fi
-
-exit 0
-
-if which nvidia-smi &> /dev/null ; then
-(
-  set_quda_environment "cuda" 
-  run_dslash "cuda" 1
-  run_dslash "cuda" 2
+  run_dslash "rocm" 4
   true
 )
 fi
@@ -572,14 +491,5 @@ if ! which nvidia-smi &> /dev/null ; then
 )
 fi
 
-
-if which nvidia-smi &> /dev/null ; then
-(
-  set_quda_environment "cuda" 
- run_multigrid "cuda" 1
- run_multigrid "cuda" 2
-  true
-)
-fi
 
 

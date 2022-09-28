@@ -1,0 +1,2 @@
+pmc : Wavefronts VALUUtilization VALUBusy VALUInsts SALUBusy SALUInsts FetchSize WriteSize MemUnitBusy MemUnitStalled 
+#pmc : L2CacheHit
